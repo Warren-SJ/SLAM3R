@@ -2,6 +2,8 @@
 
 This repository contains a study of the paper [SLAM3R: Real-Time Dense Scene Reconstruction from Monocular RGB Videos](https://openaccess.thecvf.com/content/CVPR2025/papers/Liu_SLAM3R_Real-Time_Dense_Scene_Reconstruction_from_Monocular_RGB_Videos_CVPR_2025_paper.pdf) by Yuzheng Liu, Siyan Dong, Shuzhe Wang, Yingda Yin, Yanchao Yang, Qingnam Fan and  Baoquan Chen. This paper is a CVPR 2025 highlight paper.
 
+The following is a summary of the paper along with some images which were obtained from the paper. Please refer to the original paper for more details.
+
 ## Introduction
 
 SLAM3R is a novel real-time end-to-end dense 3D reconstruction system that uses RGB videos to directly predict 3D pointmaps in a unified coordinate system through feed-forward neural networks.
@@ -101,3 +103,29 @@ $$\tilde{X}_{i}^{(H \times W \times 3)}, \tilde{C}_{i}^{(H \times W \times 1)}  
 This network is trained using a similar loss function of the I2P network. Normalization is not applied as the output scale must align with the scene frames in the input.
 
 $$L_{L2W} = \sum_{i=1}^{K+1} M_i \cdot ( \tilde{C}_i \cdot L1 (\tilde{X}_i,X_i) - \alpha \log \tilde{C}_i)$$
+
+## Experiments
+
+Training is done using ScanNet++, Aria Synthetic Environments and CO3D-v2 datasets. Weights were initialized from the DUSt3R model trained on $224 \times 224$ resolution images with $24$ encoder blocks and $124$ decoder blocks. Images are center-cropped before feeding into the model.Initially window length is set to $5$ and subsequently increased to $11$.
+
+A ground truth point cloud model for each test sequence is built up for each test sequence by back-projecting pixels to the world using ground-truth depths and camera parameters.
+
+Results on 7 scenes dataset: one-twentieth of the frames in each sequence are sampled as input video. SLAM3R is evaluated using two settings: integrating the full pointmaps predicted for all input frames to create reconstruction results (denoted by SLAM3R-NoConf), and filtering pointmaps with a confidence threshold of 3 before creating reconstruction results (SLAM3R)
+
+![Reconstruction results on 7 Scenes dataset](7_scenes.png)
+
+Results on Replica dataset: It is seen that SLAM3R surpasses all baseline methods with FPS greater than 1. It achieves reconstruction quality comparable to optimization-based methods while being significantly faster.
+
+![Reconstruction results on Replica dataset](replica.png)
+
+Results on camera pose estimation: Following DUSt3R, the camera parameters are derived from the predicted scene points using PnP-RANSAC solver in OpenCV
+
+![Camera pose estimation results](camera_pose.png)
+
+## Conclusion
+
+SLAM3R is a novel real-time end-to-end dense 3D reconstruction system that uses RGB videos to directly predict 3D pointmaps in a unified coordinate system through feed-forward neural networks. SLAM3R achieves state-of-the-art performance in terms of reconstruction accuracy, completeness, and runtime efficiency on several benchmark datasets.
+
+## Acknowledgements
+
+This repository was created as part of a study project and is not affiliated with the original authors of the paper. The images used in this summary were obtained from the original paper. I would like to thank the original authors for their excellent work. I would also like to thank [Dr. Ranga Rodrigo](https://ent.uom.lk/team/dr-ranga-rodrigo/) for his valuable guidance and support throughout this project.
