@@ -4,6 +4,8 @@ This repository contains a study of the paper [SLAM3R: Real-Time Dense Scene Rec
 
 The following is a summary of the paper along with some images which were obtained from the paper. Please refer to the original paper for more details.
 
+This is not an official implementation of the paper. All model weights and code are from the original repository.
+
 ## Introduction
 
 SLAM3R is a novel real-time end-to-end dense 3D reconstruction system that uses RGB videos to directly predict 3D pointmaps in a unified coordinate system through feed-forward neural networks.
