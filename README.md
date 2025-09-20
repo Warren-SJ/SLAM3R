@@ -131,3 +131,9 @@ SLAM3R is a novel real-time end-to-end dense 3D reconstruction system that uses 
 ## Acknowledgements
 
 This repository was created as part of a study project and is not affiliated with the original authors of the paper. The images used in this summary were obtained from the original paper. I would like to thank the original authors for their excellent work. I would also like to thank [Dr. Ranga Rodrigo](https://ent.uom.lk/team/dr-ranga-rodrigo/) for his valuable guidance and support throughout this project.
+
+## License
+
+* Code (all `.py` files): CC BY-NC-SA 4.0. Portions are borrowed/adapted from the upstream SLAM3R/DUSt3R ecosystems and remain non‑commercial, share‑alike with attribution. See `THIRD_PARTY_NOTICES.md`.
+* Documentation (this README and other original text): CC BY 4.0 © 2024–present Warren Samuelson Jayakumar.
+* Figures from the paper are © their original rights holders and are not covered by the above licenses. See `THIRD_PARTY_NOTICES.md`.

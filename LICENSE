@@ -1,21 +1,29 @@
-MIT License
+# SLAM3R Study Repository — Licensing Overview
 
-Copyright (c) 2025 Warren Samuelson Jayakumar
+Last updated: 2025-09-20
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This repository mixes original documentation authored by Warren Samuelson Jayakumar with source code that borrows/adapts from upstream research implementations. Different parts of the repository are licensed under different terms as outlined below.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1) Code
+   - License: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+     <https://creativecommons.org/licenses/by-nc-sa/4.0/>
+   - Attribution: This repository includes or adapts code originally authored by Naver Corporation and/or the respective original authors of the referenced research (see THIRD_PARTY_NOTICES.md). Upstream code is distributed under CC BY-NC-SA 4.0. Any modifications in this repository are © 2025–present Warren Samuelson Jayakumar and are provided under the same CC BY-NC-SA 4.0 terms.
+   - Summary of key terms (informative, not a substitute for the full license):
+     - You must provide attribution to the original authors and this repository for reused code.
+     - Non-commercial use only.
+     - ShareAlike: derivative works must be licensed under the same CC BY-NC-SA 4.0.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2) Documentation (README and other original textual content authored by Warren Samuelson Jayakumar)
+   - License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+     <https://creativecommons.org/licenses/by/4.0/>
+   - You are free to share and adapt the documentation for any purpose, even commercially, provided you give appropriate credit.
+
+3) Figures/Images from third parties
+
+- Figures reproduced from the SLAM3R paper or other third-party sources are NOT covered by the above licenses. They are © their respective rights holders and are used here for scholarly/research purposes with attribution. See THIRD_PARTY_NOTICES.md for details. If you are a rights holder and believe any material should be removed or updated, please open an issue or contact the maintainer.
+
+Notes
+
+- Where any conflict appears between this overview and the full license texts referenced above, the full license texts govern.
+- This repository does not grant any trademark rights.
+- For commercial licensing inquiries regarding code, contact the original rights holders of the upstream work.
