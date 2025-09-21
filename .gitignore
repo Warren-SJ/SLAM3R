@@ -208,3 +208,7 @@ __marimo__/
 
 # temporary files
 tmp/
+
+#dataset
+data/
+*.zip
