@@ -212,3 +212,6 @@ tmp/
 #dataset
 data/
 *.zip
+
+#results
+results/

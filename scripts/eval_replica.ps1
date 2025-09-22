@@ -51,7 +51,7 @@ foreach ($SCENE_NAME in $SCENE_NAMES) {
         "--save_for_eval"
     )
 
-    python @reconArgs
+    py @reconArgs
     if ($LASTEXITCODE -ne 0) { throw "recon.py failed for $SCENE_NAME with exit code $LASTEXITCODE" }
 
     Write-Host "--------Start evaluating scene $SCENE_NAME with test name $TEST_NAME--------"
@@ -62,7 +62,7 @@ foreach ($SCENE_NAME in $SCENE_NAMES) {
         "--gt_pcd=results/gt/replica/${SCENE_NAME}_pcds.npy"
     )
 
-    python @evalArgs
+    py @evalArgs
     if ($LASTEXITCODE -ne 0) { throw "eval_recon.py failed for $SCENE_NAME with exit code $LASTEXITCODE" }
 }
 
