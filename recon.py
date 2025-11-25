@@ -435,7 +435,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         per_frame_res['l2w_pcds'][i*kf_stride] = normed_pts[i]  # 224,224,3
 
     # recover the pointmap of each view in their local coordinates with the I2P model
-    # TODO: batchify
     local_confs_mean = []
     adj_distance = kf_stride
     for view_id in tqdm(range(num_views), desc="I2P resonstruction"):
@@ -475,7 +474,6 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     print(f'finish recovering pcds of {len(local_confs_mean)} frames in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean).mean():.2f}')
 
     # Special treatment: register the frames within the range of initial window with L2W model
-    # TODO: batchify
     if kf_stride > 1:
         max_conf_mean = -1
         for view_id in tqdm(range((init_num-1)*kf_stride), desc="pre-registering"):  

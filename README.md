@@ -10,13 +10,13 @@ This is not an official implementation of the paper. All model weights and code 
 
 SLAM3R is a novel real-time end-to-end dense 3D reconstruction system that uses RGB videos to directly predict 3D pointmaps in a unified coordinate system through feed-forward neural networks.
 
-Previous techniques typically require offline processing which limits their ability to be used in real-time applications. Dense scene reconstruction systems have been developed. However, these all short in terms of accuracy or completeness or they require depth sensors. monocular SLAM (Simultaneous Localization and Mapping) systems have been proposed, however these come at the cost of reduced runtime efficiency. The goal of this research paper is to develop a model which satisfies the three criteria: **reconstruction accuracy**, **completeness** and **runtime efficiency**.
+Previous techniques typically require offline processing which limits their ability to be used in real-time applications. These also usually require estimating camera parameters using SLAM or SfM followed by MVS for scene reconstruction. Dense scene reconstruction systems have been developed. However, these all short in terms of accuracy or completeness or they require depth sensors. monocular SLAM (Simultaneous Localization and Mapping) systems have been proposed, however these come at the cost of reduced runtime efficiency. The goal of this research paper is to develop a model which satisfies the three criteria: **reconstruction accuracy**, **completeness** and **runtime efficiency**.
 
 The network consists of two main components:
 
-1. **Image-to-points (I2P)**: Reconstructs local geometry from a sliding window
+1. **Image-to-points (I2P)**: Reconstructs local geometry from a sliding window by processing short clips. It predicts the 3D pointmap for the keyframe in the window using information from all supporting frames in the window.
 
-2. **Local-to-World (L2W)**: Registers local reconstructions to build a globally consistent 3D scene
+2. **Local-to-World (L2W)**: Registers local reconstructions to build a globally consistent 3D scene. It incrementally fuses the newly reconstructed pointmap into a global 3D coordinate system.
 
 ## Related Work
 
@@ -46,9 +46,13 @@ The I2P model infers dense 3D pointmaps for every pixel of a keyframe. By defaul
 
 This model has a multi-branch vision transformer (ViT) backbone consisting of a shared encoder, two decoders for keyframe and supporting frames and a point regression head for final prediction.
 
-Image encoder: Each frame $I_i$ is encoded to obtain token representations $F_i \in \mathbb{R}^{T \times d}$, where $T$ is the number of tokens and $d$ is the token dimension. There are $m$ encoder blocks each containing self-attention and feed-forward layers. Output is divided into 2 parts for the key frame and supporting frames.
+#### Image encoder
 
-Keyframe decoder: Consists of $n$ ViT decoder blocks, each containing self-attention, cross-attention and feed-forward layers. The model uses a novel multi-view cross-attention to combine information from different supporting frames. The decoder takes $F_{key}$ as input for self-attention for the keyframe to reason about itself and performs cross-attention between $F_{key}$ and all supporting frame features $\{F_{sup}\}_{i=1}^{L-1}$ to get geometric information from other frames. The architecture uses multi-view cross-attention, meaning there is a seperate cross-attention for each supporting frame.
+Each frame $I_i$ is encoded to obtain token representations $F_i \in \mathbb{R}^{T \times d}$, where $T$ is the number of tokens and $d$ is the token dimension. There are $m$ ViT encoder blocks each containing self-attention and feed-forward layers. Output is divided into 2 parts for the key frame and supporting frames.
+
+#### Keyframe decoder
+
+Consists of $n$ ViT decoder blocks, each containing self-attention, cross-attention and feed-forward layers. The model uses a novel multi-view cross-attention to combine information from different supporting frames. The decoder takes $F_{key}$ as input for self-attention for the keyframe to reason about itself and performs cross-attention between $F_{key}$ and all supporting frame features $\{F_{sup}\}_{i=1}^{L-1}$ to get geometric information from other frames. The architecture uses multi-view cross-attention, meaning there is a seperate cross-attention for each supporting frame.
 
 ![Image of the keyframe decoder architecture](decoder.png)
 
@@ -58,17 +62,23 @@ $$G_{key} = D_{key}(F_{key}, \{F_{sup}\}_{i=1}^{L-1})$$
 
 where $D_{key}$ is the keyframe decoder and $G_{key} \in \mathbb{R}^{T \times d}$ is the decoded keyframe tokens.
 
-Supporting decoder: This complements the keyframe decoder. It inherits the DUSt3R architecture. All supporting frames share the same supporting decoder weights. It consists of self-attention and cross-attention, but only with the keyframe tokens.
+#### Supporting decoder
+
+This complements the keyframe decoder. It inherits the DUSt3R architecture. All supporting frames share the same supporting decoder weights. It consists of self-attention and cross-attention, but only with the keyframe tokens.
 
 $$G_{sup_i} = D_{sup}(F_{sup_i}, F_{key}), i = 1, \ldots, L-1$$
 
 where $D_{sup}$ is the supporting decoder and $G_{sup_i} \in \mathbb{R}^{T \times d}$ is the decoded supporting frame tokens.
 
-Point reconstruction: A linear head is applied to regress dense 3D pointmaps in the unified coordinate system from decoded tokens.
+#### Point reconstruction
 
-$$\hat{X}_{i}^{(H \times W \times 3)}, \hat{C}_{i}^{(H \times W \times 1)}  = H(G_{i}^{(T \times d)}), i = 1, \ldots, L-1$$
+A linear head is applied to regress dense 3D pointmaps in the unified coordinate system from decoded tokens.
 
-Training loss: The I2P network is trained end-to-end using ground truth scene points. The training loss is given by:
+$$\hat{X}_{i}^{(H \times W \times 3)}, \hat{C}_{i}^{(H \times W \times 1)}  = H(G_{i}^{(T \times d)}), i = 1, \ldots, L$$
+
+#### Training loss
+
+The I2P network is trained end-to-end using ground truth scene points. The training loss is given by:
 
 $$L_{I2P} = \sum_{i=1}^{L} M_i \cdot ( \hat{C}_i \cdot L1 ( \frac{1}{\hat{z}}\hat{X}_i,\frac{1}{z}X_i ) - \alpha \log \hat{C}_i)$$
 
