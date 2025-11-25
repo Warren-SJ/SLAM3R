@@ -268,3 +268,82 @@ This section explains the `Local2WorldModel` class (defined in `slam3r/models.py
 - `results[i]['pts3d']` (if `i` is a reference id) or `results[i]['pts3d_in_other_view']` (if source) are available per view.
 
 If you want, I can also add a short diagram or inline code comments in `slam3r/models.py` to point readers to `get_pe`, `set_pointmap_embedder`, and where `ref_pes`/`src_pes` are added to the decoder. Would you like inline comments or a diagram added?
+
+## Pipeline
+
+- **Location**: `recon.py` — function `scene_recon_pipeline(i2p_model, l2w_model, dataset, args, save_dir="results")`.
+- **Purpose**: Orchestrates a full scene reconstruction run. It pre-extracts image encoder tokens, selects keyframes, initializes a world coordinate frame, reconstructs per-view local pointmaps with the I2P model, registers those local pointmaps to world coordinates with the L2W model, maintains a buffering set of reference frames, and finally saves a fused pointcloud (PLY) and optional per-frame predictions.
+
+### High-level flow
+
+- **Preprocess dataset:** load a scene from `dataset` (expects `dataset.scene_names` and `dataset[0]` to return view dicts). Build `rgb_imgs` and `valid_masks`, convert images to tensors and move them to `args.device`.
+- **Pre-extract encoder tokens:** call `get_img_tokens(data_views, i2p_model)` to produce `res_shapes, res_feats, res_poses` (these `img_tokens` are reused by both I2P and L2W to speed up inference).
+- **Form `input_views`:** a lightweight list of dicts with `label`, `img_tokens`, `true_shape`, and `img_pos` used for downstream inference.
+- **Choose keyframe stride (`kf_stride`):** either use `args.keyframe_stride` or call `adapt_keyframe_stride(...)` which tests different strides and picks the one with highest mean I2P confidence.
+- **Initialize scene:** call `initialize_scene(...)` on the first window to obtain `initial_pcds`, `initial_confs`, and `init_ref_id`. These set the initial world coordinate frames and bootstrap the buffering set.
+- **I2P (local) reconstruction:** iterate views and for each non-initial view construct a local window (radius `win_r`) and run `i2p_inference_batch(...)` to recover per-view local `pts3d` and `conf`. Store results in `per_frame_res['i2p_pcds']` / `i2p_confs` and put normalized `pts3d_cam` into `input_views[view_id]`.
+- **Pre-register head frames (inside initial window):** if `kf_stride > 1`, register non-keyframes in the head region using `l2w_inference(...)` against the buffering set to align them into world coordinates.
+- **Main registration loop:** repeatedly select a batch of source frames to register (`num_register` per round), choose scene reference frames from the buffering set using `scene_frame_retrieve(...)`, run `l2w_inference(ref_views + src_views, l2w_model, ...)`, update `input_views[view_id]['pts3d_world']`, `per_frame_res['l2w_confs']` and `per_frame_res['l2w_pcds']`, then update the buffering set using either `reservoir` or `fifo` strategies guided by mean confidence.
+- **Memory management:** after updates the code moves non-buffering `input_views` to CPU to free GPU memory (`to_device(..., device='cpu')`) while buffering set views remain on `args.device`.
+- **Finalize & save:** compute simple registration statistics, call `save_recon(...)` to fuse and save a sampled PLY (`scene_id_recon.ply`), and optionally save per-frame predictions under `save_dir/preds`.
+
+### Side-effects & I/O
+
+- Writes fused pointcloud to disk (`save_dir/{scene_id}_recon.ply`) and may write per-frame `.npy` predictions to `save_dir/preds`.
+- Moves tensors between GPU and CPU to manage memory.
+- Prints progress via `tqdm` and logging `print` statements.
+
+### Assumptions & required helpers
+
+- `i2p_model` and `l2w_model` are ready `torch.nn.Module` instances (constructed and possibly loaded from checkpoint).
+- Helper functions used by the pipeline: `get_img_tokens`, `i2p_inference_batch`, `l2w_inference`, `normalize_views`, `transform_img`, `to_device`, `save_ply`, and `scene_frame_retrieve` are defined and available (they are in `recon.py` or imported from `slam3r.utils.recon_utils`).
+
+## Tunable Parameters
+
+The CLI in `recon.py` exposes the knobs most users touch. All flags below can be supplied when running `python recon.py ...`. The notes describe what the parameter controls and what happens when you move it up or down.
+
+### Runtime, IO & model loading
+
+- `--device` (`cuda` by default) / `--gpu_id` (auto): choose the execution device. Switching to `cpu` makes debugging easier but slows everything; pinning `gpu_id` is useful on multi-GPU hosts to avoid contention.
+- `--seed` (`42`): drives `numpy`/PyTorch RNGs for reproducibility. Changing it alters random keyframe samples, buffer sampling, and point subsampling, which can slightly perturb reconstructions.
+- `--dataset` vs `--img_dir`: choose whether to load a built-in dataset class (by string expression) or a raw image folder. Using `--dataset` lets you tap dataset-specific metadata (e.g., masks); `--img_dir` is lighter but assumes defaults.
+- `--i2p_model` / `--l2w_model`: Python expressions that instantiate the backbone architectures. You can swap head types, embedding sizes, decoder depths, etc. Larger configs (more heads/depth) usually improve fidelity but raise VRAM/time; smaller configs do the reverse. Pair these with `--i2p_weights` / `--l2w_weights` to load matching checkpoints.
+- `--save_dir`, `--test_name`, `--save_all_views`, `--save_preds`, `--save_for_eval`: configure output layout. Enabling the save flags produces more `.ply`/`.npy` artifacts which aids debugging but increases disk usage and write time.
+
+### Keyframe scheduling & initialization
+
+- `--keyframe_stride` (`-1` = auto): sets how far apart keyframes are sampled. Larger strides reduce compute but risk drift because frames are farther apart; smaller strides improve overlap but cost more registrations. Auto-mode searches between `--keyframe_adapt_min`, `--keyframe_adapt_max`, stepping by `--keyframe_adapt_stride` to pick the stride with the best I2P confidence.
+- `--initial_winsize` (`5`): number of frames used to bootstrap the world frame. Higher values give the initializer more context but can fail if motion varies widely; lowering it makes initialization faster but less stable.
+- `--win_r` (`3`): radius of the local window passed to I2P around each frame. Increasing it feeds more temporal context (often raising confidence) but multiplies memory/latency; lowering it makes the model rely on nearer neighbors only.
+
+### Confidence gating & sampling density
+
+- `--conf_thres_i2p` (`1.5`): mask threshold on I2P confidences before handing pointmaps to L2W. Raising it removes noisy pixels (cleaner registration) but leaves holes; lowering it keeps more data but can introduce outliers.
+- `--conf_thres_l2w` (`12`): confidence threshold applied while saving final fused points. Higher values yield crisper clouds at the cost of thin structures; lower values retain detail but may include floaters.
+- `--num_points_save` (`2_000_000`): number of points sampled for the final `.ply`. Increasing it preserves detail but produces larger files and heavier viewers; decreasing it is good for quick previews.
+- `--norm_input` (flag): when set, normalizes pointmaps before L2W to stabilize scale. Helpful for scenes with wildly varying depth ranges, but can wash out absolute-scale cues if disabled.
+
+### Registration workload & buffering
+
+- `--num_scene_frame` (`10`): how many reference frames are selected from the buffer per registration round. More references improve coverage but require more GPU memory and slow each L2W call; fewer references are cheaper but risk poor anchoring.
+- `--max_num_register` (`10`): number of frames to register per round. Raising it increases throughput but also peak memory usage; lowering it steadies memory at the expense of runtime.
+- `--update_buffer_intv` (`1`): how frequently (in multiples of `kf_stride`) the buffering set is reconsidered. Smaller intervals keep references fresh but add overhead; larger ones reduce churn but may leave stale references.
+- `--buffer_size` (`100`, `-1` = unbounded): maximum number of frames kept in the global reference buffer. Bigger buffers enhance robustness at the cost of GPU RAM; smaller buffers are lighter but can lose coverage on long videos.
+- `--buffer_strategy` (`reservoir` | `fifo`): policy for picking/removing buffer entries. `reservoir` spreads references uniformly over time (good for long videos) but introduces randomness; `fifo` always holds the most recent frames (responsive but can forget early views).
+- Reservoir sampling itself is randomized, so `--seed` influences which frames survive.
+
+### Derived sampling controls
+
+- `--keyframe_adapt_min`, `--keyframe_adapt_max`, `--keyframe_adapt_stride`: bounds for the auto stride search. Expanding the range lets the autotuner explore very sparse or dense sampling; narrowing it speeds the search but may miss the sweet spot.
+
+### Output & diagnostics
+
+- `--save_all_views`: dumps every per-frame `.ply`. Helpful for QA but significantly increases storage and write time.
+- `--save_preds`: persists all per-frame tensors (`local_pcds`, `registered_pcds`, confidences, RGB) for offline evaluation. Turn it on when you need metrics; leave it off for faster runs.
+- `--save_for_eval`: lighter-weight version that stores only registered pointmaps/confidences, trading completeness for speed/disk.
+
+### Practical tuning tips
+
+- Start with the defaults and adjust one knob at a time; many parameters interact (e.g., larger `win_r` usually requires lowering `max_num_register` to avoid OOM).
+- When pushing quality upward, consider the trio (`win_r`, `num_scene_frame`, `conf_thres_l2w`) together: bigger windows and more references benefit from a slightly higher confidence cutoff to keep noise manageable.
+- For long sequences, favor `reservoir` buffering with a higher `buffer_size` and a modest `update_buffer_intv` so early frames remain represented.
