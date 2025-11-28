@@ -10,7 +10,6 @@ CC BY-NC-SA 4.0 license (non-commercial use only). See THIRD_PARTY_NOTICES.md fo
 
 License: CC BY-NC-SA 4.0 — https://creativecommons.org/licenses/by-nc-sa/4.0/
 """
-
 import warnings
 warnings.filterwarnings("ignore")
 import os
@@ -19,7 +18,7 @@ from tqdm import tqdm
 import argparse
 import json
 import numpy as np
-import torch
+from numpy.lib.format import open_memmap
 import matplotlib.pyplot as plt
 plt.ion()
 
@@ -91,56 +90,116 @@ def save_recon(views, pred_frame_num, save_dir, scene_id, save_all_views=False,
                       imgs=None, registered_confs=None, 
                       num_points_save=200000, conf_thres_res=3, valid_masks=None):  
     save_name = f"{scene_id}_recon.ply"
-    
-    # collect the registered point clouds and rgb colors
+
+    if num_points_save <= 0:
+        raise ValueError("num_points_save must be positive")
+    # collect the registered point clouds and rgb colors without storing everything at once
     if imgs is None:
         imgs = [transform_img(unsqueeze_view(view))[:,::-1] for view in views]
-    pcds = []
-    rgbs = []
+
+    if valid_masks is not None:
+        frame_valid_masks = []
+        for mask in valid_masks:
+            if mask is None:
+                frame_valid_masks.append(None)
+                continue
+            frame_mask = mask.detach().cpu().numpy() if torch.is_tensor(mask) else np.asarray(mask)
+            if frame_mask.ndim == 3:
+                frame_mask = frame_mask[0]
+            frame_valid_masks.append(frame_mask.reshape(-1).astype(bool))
+    else:
+        frame_valid_masks = [None] * pred_frame_num
+
+    if registered_confs is not None:
+        frame_conf_masks = []
+        for conf in registered_confs:
+            if conf is None:
+                frame_conf_masks.append(None)
+                continue
+            conf_np = conf.detach().cpu().numpy() if torch.is_tensor(conf) else np.asarray(conf)
+            conf_np = conf_np.reshape(-1)
+            frame_conf_masks.append(conf_np > conf_thres_res)
+    else:
+        frame_conf_masks = [None] * pred_frame_num
+
+    pts_count = 0
+    valid_count = 0
+    rng = np.random.default_rng()
+    reservoir_pts = np.empty((num_points_save, 3), dtype=np.float32)
+    reservoir_rgbs = np.empty((num_points_save, 3), dtype=np.float32)
+    filled = 0
+    total_seen = 0
+
     for i in range(pred_frame_num):
         registered_pcd = to_numpy(views[i]['pts3d_world'][0])
         if registered_pcd.shape[0] == 3:
             registered_pcd = registered_pcd.transpose(1,2,0)
-        registered_pcd = registered_pcd.reshape(-1,3)
-        rgb = imgs[i].reshape(-1,3)
-        pcds.append(registered_pcd)
-        rgbs.append(rgb)
-        
-    if save_all_views:
-        for i in range(pred_frame_num):
-            save_ply(points=pcds[i], save_path=join(save_dir, f"frame_{i}.ply"), colors=rgbs[i])
-    
-    res_pcds = np.concatenate(pcds, axis=0)
-    res_rgbs = np.concatenate(rgbs, axis=0)
-    
-    pts_count = len(res_pcds)
-    valid_ids = np.arange(pts_count)
-    
-    # filter out points with gt valid masks
-    if valid_masks is not None:
-        valid_masks = np.stack(valid_masks, axis=0).reshape(-1)
-        # print('filter out ratio of points by gt valid masks:', 1.-valid_masks.astype(float).mean())
-    else:
-        valid_masks = np.ones(pts_count, dtype=bool)
-    
-    # filter out points with low confidence
-    if registered_confs is not None:
-        conf_masks = []
-        for i in range(len(registered_confs)):
-            conf = registered_confs[i]
-            conf_mask = (conf > conf_thres_res).reshape(-1).cpu() 
-            conf_masks.append(conf_mask)
-        conf_masks = np.array(torch.cat(conf_masks))
-        valid_ids = valid_ids[conf_masks&valid_masks]
-        print('ratio of points filered out: {:.2f}%'.format((1.-len(valid_ids)/pts_count)*100))
-    
-    # sample from the resulting pcd consisting of all frames
-    n_samples = min(num_points_save, len(valid_ids))
-    print(f"resampling {n_samples} points from {len(valid_ids)} points")
-    sampled_idx = np.random.choice(valid_ids, n_samples, replace=False)
-    sampled_pts = res_pcds[sampled_idx]
-    sampled_rgbs = res_rgbs[sampled_idx]
+        registered_pcd = registered_pcd.reshape(-1,3).astype(np.float32)
+        rgb = imgs[i].reshape(-1,3).astype(np.float32)
+        pts_count += registered_pcd.shape[0]
+
+        if save_all_views:
+            save_ply(points=registered_pcd, 
+                     save_path=join(save_dir, f"frame_{i}.ply"), 
+                     colors=rgb)
+
+        frame_mask = np.ones(registered_pcd.shape[0], dtype=bool)
+        if frame_valid_masks[i] is not None:
+            frame_mask &= frame_valid_masks[i]
+        if frame_conf_masks[i] is not None:
+            frame_mask &= frame_conf_masks[i]
+
+        mask_indices = np.nonzero(frame_mask)[0]
+        if mask_indices.size == 0:
+            continue
+
+        chunk_pts = registered_pcd[mask_indices]
+        chunk_rgbs = rgb[mask_indices]
+        valid_count += chunk_pts.shape[0]
+
+        for idx in range(chunk_pts.shape[0]):
+            total_seen += 1
+            if filled < num_points_save:
+                reservoir_pts[filled] = chunk_pts[idx]
+                reservoir_rgbs[filled] = chunk_rgbs[idx]
+                filled += 1
+            else:
+                j = rng.integers(0, total_seen)
+                if j < num_points_save:
+                    reservoir_pts[j] = chunk_pts[idx]
+                    reservoir_rgbs[j] = chunk_rgbs[idx]
+
+    if valid_count == 0:
+        raise RuntimeError("No valid points available for reconstruction output")
+
+    ratio_filtered = (1.0 - valid_count / max(pts_count, 1)) * 100
+    print('ratio of points filtered out: {:.2f}%'.format(ratio_filtered))
+
+    actual_samples = min(num_points_save, valid_count)
+    print(f"resampling {actual_samples} points from {valid_count} points")
+
+    sampled_pts = reservoir_pts[:actual_samples]
+    sampled_rgbs = reservoir_rgbs[:actual_samples]
     save_ply(points=sampled_pts[:,:3], save_path=join(save_dir, save_name), colors=sampled_rgbs)
+
+
+def _save_tensor_sequence(tensors, file_path, label, squeeze_first_dim=False):
+    """Stream tensors into an .npy file without materializing the full stack."""
+    if not tensors:
+        raise RuntimeError(f"No tensors available for {label}")
+
+    def _prepare(arr):
+        np_arr = arr.detach().cpu().numpy()
+        if squeeze_first_dim and np_arr.shape[0] == 1:
+            np_arr = np_arr[0]
+        return np_arr
+
+    first = _prepare(tensors[0])
+    mmap_shape = (len(tensors),) + first.shape
+    mmap = open_memmap(file_path, mode='w+', dtype=first.dtype, shape=mmap_shape)
+    for idx, tensor in enumerate(tensors):
+        mmap[idx] = _prepare(tensor)
+    del mmap
 
 
 def load_model(model_name, weights, device='cuda'):
@@ -409,6 +468,16 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
     per_frame_res = dict(i2p_pcds=[], i2p_confs=[], l2w_pcds=[], l2w_confs=[])
     for key in per_frame_res:
         per_frame_res[key] = [None for _ in range(num_views)]
+
+    def _gather_cpu_tensors(tensors, label):
+        """Ensure every tensor exists and lives on CPU before serialization."""
+        missing_idx = [idx for idx, tensor in enumerate(tensors) if tensor is None]
+        if missing_idx:
+            raise RuntimeError(
+                f"Cannot save {label}: missing entries for views {missing_idx[:5]}"
+                + (" ..." if len(missing_idx) > 5 else "")
+            )
+        return [tensor.detach().cpu() for tensor in tensors]
     
     registered_confs_mean = [_ for _ in range(num_views)]
     
@@ -628,10 +697,15 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)
         print(f">> saving per-frame predictions to {preds_dir}")
-        np.save(join(preds_dir, 'local_pcds.npy'), torch.cat(per_frame_res['i2p_pcds']).cpu().numpy())
-        np.save(join(preds_dir, 'registered_pcds.npy'), torch.cat(per_frame_res['l2w_pcds']).cpu().numpy())
-        np.save(join(preds_dir, 'local_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['i2p_confs']]).numpy())
-        np.save(join(preds_dir, 'registered_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['l2w_confs']]).numpy())
+        i2p_pcds_cpu = _gather_cpu_tensors(per_frame_res['i2p_pcds'], 'local point clouds')
+        l2w_pcds_cpu = _gather_cpu_tensors(per_frame_res['l2w_pcds'], 'registered point clouds')
+        i2p_confs_cpu = _gather_cpu_tensors(per_frame_res['i2p_confs'], 'local confidences')
+        l2w_confs_cpu = _gather_cpu_tensors(per_frame_res['l2w_confs'], 'registered confidences')
+
+        _save_tensor_sequence(i2p_pcds_cpu, join(preds_dir, 'local_pcds.npy'), 'local point clouds', squeeze_first_dim=True)
+        _save_tensor_sequence(l2w_pcds_cpu, join(preds_dir, 'registered_pcds.npy'), 'registered point clouds', squeeze_first_dim=True)
+        _save_tensor_sequence(i2p_confs_cpu, join(preds_dir, 'local_confs.npy'), 'local confidences')
+        _save_tensor_sequence(l2w_confs_cpu, join(preds_dir, 'registered_confs.npy'), 'registered confidences')
         np.save(join(preds_dir, 'input_imgs.npy'), np.stack(rgb_imgs))
         
         metadata = dict(scene_id=scene_id,
@@ -645,8 +719,10 @@ def scene_recon_pipeline(i2p_model:Image2PointsModel,
         preds_dir = join(save_dir, 'preds')
         os.makedirs(preds_dir, exist_ok=True)
         print(f">> saving per-frame predictions to {preds_dir}")
-        np.save(join(preds_dir, 'registered_pcds.npy'), torch.cat(per_frame_res['l2w_pcds']).cpu().numpy())
-        np.save(join(preds_dir, 'registered_confs.npy'), torch.stack([conf.cpu() for conf in per_frame_res['l2w_confs']]).numpy())
+        l2w_pcds_cpu = _gather_cpu_tensors(per_frame_res['l2w_pcds'], 'registered point clouds')
+        l2w_confs_cpu = _gather_cpu_tensors(per_frame_res['l2w_confs'], 'registered confidences')
+        _save_tensor_sequence(l2w_pcds_cpu, join(preds_dir, 'registered_pcds.npy'), 'registered point clouds', squeeze_first_dim=True)
+        _save_tensor_sequence(l2w_confs_cpu, join(preds_dir, 'registered_confs.npy'), 'registered confidences')
 
 if __name__ == "__main__":
 
