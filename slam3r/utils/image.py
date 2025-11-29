@@ -91,18 +91,44 @@ def load_images(folder_or_list, size, square_ok=False,
         raise ValueError(f'bad {folder_or_list=} ({type(folder_or_list)})')
    
     # sort images by number in name
-    len_postfix = len(postfix) if postfix is not None \
-        else len(folder_content[0]) - folder_content[0].rfind('.')
+    def _effective_postfix_length(filename: str) -> int:
+        if postfix is not None:
+            return len(postfix)
+        last_dot = filename.rfind('.')
+        if last_dot == -1:
+            return 0
+        return len(filename) - last_dot
+
+    len_postfix = _effective_postfix_length(folder_content[0]) if folder_content else 0
+
+    def _extract_numeric_key(name: str) -> float:
+        nonlocal len_postfix
+        if len_postfix == 0:
+            len_postfix = _effective_postfix_length(name)
+        dot_index = max(len(name) - len_postfix, 0)
+        i = dot_index - 1
+        # skip trailing non-digit characters (e.g., ".color")
+        while i >= 0 and not name[i].isdigit():
+            i -= 1
+        if i < 0:
+            return float('nan')
+        end = i + 1
+        while i >= 0 and name[i].isdigit():
+            i -= 1
+        start = i + 1
+        slice_ = name[start:end]
+        if not slice_:
+            return float('nan')
+        return float(slice_)
 
     img_numbers = []
+    fallback_counter = 0
     for name in folder_content:
-        dot_index = len(name) - len_postfix
-        number_start = 0
-        for i in range(dot_index-1, 0, -1):
-            if not name[i].isdigit():
-                number_start = i + 1
-                break
-        img_numbers.append(float(name[number_start:dot_index]))
+        key = _extract_numeric_key(name)
+        if np.isnan(key):
+            key = fallback_counter
+            fallback_counter += 1
+        img_numbers.append(key)
     folder_content = [x for _, x in sorted(zip(img_numbers, folder_content))]
 
     if start_idx > 0:
