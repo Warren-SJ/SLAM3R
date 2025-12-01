@@ -1,0 +1,77 @@
+[
+  {
+    "scene": "office_0",
+    "metric": "Acc:5.112, Comp:3.133, f-score20:0.288, f-score15:0.184, f-score10:0.081",
+    "align_succ": "True"
+  },
+  {
+    "scene": "office_1",
+    "metric": "Acc:3.685, Comp:2.522, f-score20:0.391, f-score15:0.279, f-score10:0.149",
+    "align_succ": "True"
+  },
+  {
+    "scene": "office_2",
+    "metric": "Acc:3.341, Comp:2.219, f-score20:0.506, f-score15:0.342, f-score10:0.154",
+    "align_succ": "True"
+  },
+  {
+    "scene": "office_3",
+    "metric": "Acc:3.427, Comp:2.455, f-score20:0.411, f-score15:0.260, f-score10:0.113",
+    "align_succ": "True"
+},
+{
+    "scene": "office_4",
+    "metric": "Acc:3.806, Comp:2.869, f-score20:0.293, f-score15:0.176, f-score10:0.081",
+    "align_succ": "True"
+},
+{
+    "scene": "room_0",
+    "metric": "Acc:2.797, Comp:2.075, f-score20:0.493, f-score15:0.305, f-score10:0.122",
+    "align_succ": "True"
+},
+{
+    "scene": "room_1",
+    "metric": "Acc:2.724, Comp:1.919, f-score20:0.544, f-score15:0.370, f-score10:0.167",
+    "align_succ": "True"
+},
+{
+    "scene": "room_2",
+    "metric": "Acc:3.406, Comp:2.463, f-score20:0.422, f-score15:0.296, f-score10:0.162",
+    "align_succ": "True"
+},
+{
+    "scene": "chess",
+    "metric": "Acc:2.404, Comp:1.487, f-score20:0.757, f-score15:0.659, f-score10:0.473",
+    "align_succ": "True"
+},
+{
+    "scene": "fire",
+    "metric": "Acc:1.447, Comp:1.085, f-score20:0.839, f-score15:0.753, f-score10:0.594",
+    "align_succ": "True"
+},
+{
+    "scene": "heads",
+    "metric": "Acc:1.422, Comp:1.117, f-score20:0.844, f-score15:0.778, f-score10:0.649",
+    "align_succ": "True"
+},
+{
+    "scene": "office",
+    "metric": "Acc:2.721, Comp:2.287, f-score20:0.603, f-score15:0.467, f-score10:0.279",
+    "align_succ": "True"
+},
+{
+    "scene": "pumpkin",
+    "metric": "Acc:2.648, Comp:2.096, f-score20:0.590, f-score15:0.480, f-score10:0.317",
+    "align_succ": "True"
+},
+{
+    "scene": "redkitchen",
+    "metric": "Acc:2.897, Comp:2.122, f-score20:0.572, f-score15:0.448, f-score10:0.279",
+    "align_succ": "True"
+},
+{
+    "scene": "stairs",
+    "metric": "Acc:3.568, Comp:9.816, f-score20:0.539, f-score15:0.436, f-score10:0.286",
+    "align_succ": "True"
+}
+]
