@@ -4,6 +4,7 @@
 # --------------------------------------------------------
 # utilitary functions for DUSt3R
 # --------------------------------------------------------
+import os
 import numpy as np
 import torch
 
@@ -75,15 +76,27 @@ def collate_with_cat(whatever, lists=False):
 def listify(elems):
     return [x for e in elems for x in e]
 
+_NVTX_ENABLED = os.environ.get('SLAM3R_ENABLE_NVTX', '1').lower() not in ('0', 'false', 'no')
+_NVTX_SYNC = os.environ.get('SLAM3R_NVTX_SYNC', '0').lower() in ('1', 'true', 'yes')
+
+
 class MyNvtxRange():
-    def __init__(self, name):
+    def __init__(self, name: str):
         self.name = name
+        self._enabled = bool(_NVTX_ENABLED and torch.cuda.is_available())
 
     def __enter__(self):
-        torch.cuda.synchronize()
+        if not self._enabled:
+            return self
+        if _NVTX_SYNC:
+            torch.cuda.synchronize()
         torch.cuda.nvtx.range_push(self.name)
+        return self
 
-    def __exit__(self, type, value, traceback):
-        torch.cuda.synchronize()
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self._enabled:
+            return
+        if _NVTX_SYNC:
+            torch.cuda.synchronize()
         torch.cuda.nvtx.range_pop()
         
