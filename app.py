@@ -16,6 +16,7 @@ import numpy as np
 import tempfile
 import functools
 import subprocess
+from collections import defaultdict
 
 from recon import get_img_tokens, initialize_scene, adapt_keyframe_stride, i2p_inference_batch, l2w_inference, normalize_views, scene_frame_retrieve
 from slam3r.datasets.wild_seq import Seq_Data
@@ -56,7 +57,9 @@ def recon_scene(i2p_model:Image2PointsModel,
                 img_dir_or_list, 
                 keyframe_stride, win_r, initial_winsize, conf_thres_i2p,
                 num_scene_frame, update_buffer_intv, buffer_strategy, buffer_size,
-                conf_thres_l2w, num_points_save):
+                conf_thres_l2w, num_points_save,
+                i2p_batch_size: int = 4,
+                l2w_prereg_batch_size: int = 4):
     # print(f"device: {device},\n save_dir: {save_dir},\n fps: {fps},\n keyframe_stride: {keyframe_stride},\n win_r: {win_r},\n initial_winsize: {initial_winsize},\n conf_thres_i2p: {conf_thres_i2p},\n num_scene_frame: {num_scene_frame},\n update_buffer_intv: {update_buffer_intv},\n buffer_strategy: {buffer_strategy},\n buffer_size: {buffer_size},\n conf_thres_l2w: {conf_thres_l2w},\n num_points_save: {num_points_save}")
     np.random.seed(42)
     
@@ -67,6 +70,8 @@ def recon_scene(i2p_model:Image2PointsModel,
     dataset = Seq_Data(img_dir_or_list, to_tensor=True)
     data_views = dataset[0][:]
     num_views = len(data_views)
+    i2p_batch_size = max(1, int(i2p_batch_size))
+    l2w_prereg_batch_size = max(1, int(l2w_prereg_batch_size))
     
     # Pre-save the RGB images along with their corresponding masks 
     # in preparation for visualization at last.
@@ -147,69 +152,127 @@ def recon_scene(i2p_model:Image2PointsModel,
         per_frame_res['l2w_pcds'][i*kf_stride] = normed_pts[i]  # 224,224,3
 
     # recover the pointmap of each view in their local coordinates with the I2P model
-    # TODO: batchify
     local_confs_mean = []
     adj_distance = kf_stride
+    i2p_buckets = defaultdict(list)
+
+    def flush_i2p_bucket(bucket_key: int):
+        batch_entries = i2p_buckets[bucket_key]
+        if not batch_entries:
+            return
+        batch_views = [entry[1] for entry in batch_entries]
+        batch_output = i2p_inference_batch(batch_views, i2p_model, ref_id=0,
+                                           tocpu=False, unsqueeze=False)['preds']
+        ref_pred = batch_output[0]
+        pts_batch = ref_pred['pts3d']
+        conf_batch = ref_pred['conf']
+        for batch_idx, (view_id, _) in enumerate(batch_entries):
+            pts3d_gpu = pts_batch[batch_idx:batch_idx+1]
+            conf_gpu = conf_batch[batch_idx:batch_idx+1]
+            per_frame_res['i2p_pcds'][view_id] = pts3d_gpu.detach().cpu()
+            per_frame_res['i2p_confs'][view_id] = conf_gpu[0].detach().cpu()
+            valid_mask = conf_gpu > conf_thres_i2p
+            pts_cam = normalize_views([pts3d_gpu], [valid_mask])[0]
+            pts_cam = pts_cam.clone()
+            pts_cam[~valid_mask] = 0
+            input_views[view_id]['pts3d_cam'] = pts_cam
+        i2p_buckets[bucket_key].clear()
+
+    def _prepare_i2p_window(sel_indices):
+        prepared = []
+        for idx in sel_indices:
+            view = input_views[idx]
+            sanitized = {}
+            for key in ('img_tokens', 'img', 'true_shape', 'img_pos'):
+                if key in view:
+                    sanitized[key] = view[key]
+            prepared.append(sanitized)
+        return prepared
+
     for view_id in tqdm(range(num_views), desc="I2P resonstruction"):
-        # skip the views in the initial window
         if view_id in buffering_set_ids:
-            # trick to mark the keyframe in the initial window
             if view_id // kf_stride == init_ref_id:
                 per_frame_res['i2p_pcds'][view_id] = per_frame_res['l2w_pcds'][view_id].cpu()
             else:
                 per_frame_res['i2p_pcds'][view_id] = torch.zeros_like(per_frame_res['l2w_pcds'][view_id], device="cpu")
             per_frame_res['i2p_confs'][view_id] = per_frame_res['l2w_confs'][view_id].cpu()
             continue
-        # construct the local window 
-        sel_ids = [view_id]
-        for i in range(1,win_r+1):
-            if view_id-i*adj_distance >= 0:
-                sel_ids.append(view_id-i*adj_distance)
-            if view_id+i*adj_distance < num_views:
-                sel_ids.append(view_id+i*adj_distance)
-        local_views = [input_views[id] for id in sel_ids]
-        ref_id = 0 
-        # recover points in the local window, and save the keyframe points and confs
-        output = i2p_inference_batch([local_views], i2p_model, ref_id=ref_id, 
-                                    tocpu=False, unsqueeze=False)['preds']
-        #save results of the i2p model
-        per_frame_res['i2p_pcds'][view_id] = output[ref_id]['pts3d'].cpu() # 1,224,224,3
-        per_frame_res['i2p_confs'][view_id] = output[ref_id]['conf'][0].cpu() # 224,224
 
-        # construct the input for L2W model        
-        input_views[view_id]['pts3d_cam'] = output[ref_id]['pts3d'] # 1,224,224,3
-        valid_mask = output[ref_id]['conf'] > conf_thres_i2p # 1,224,224
-        input_views[view_id]['pts3d_cam'] = normalize_views([input_views[view_id]['pts3d_cam']],
-                                                    [valid_mask])[0]
-        input_views[view_id]['pts3d_cam'][~valid_mask] = 0 
+        sel_ids = [view_id]
+        for i in range(1, win_r+1):
+            if view_id - i*adj_distance >= 0:
+                sel_ids.append(view_id - i*adj_distance)
+            if view_id + i*adj_distance < num_views:
+                sel_ids.append(view_id + i*adj_distance)
+        local_views = _prepare_i2p_window(sel_ids)
+        bucket_key = len(sel_ids)
+        i2p_buckets[bucket_key].append((view_id, local_views))
+        if len(i2p_buckets[bucket_key]) >= i2p_batch_size:
+            flush_i2p_bucket(bucket_key)
+
+    for pending_key in list(i2p_buckets.keys()):
+        flush_i2p_bucket(pending_key)
 
     local_confs_mean = [conf.mean() for conf in per_frame_res['i2p_confs']] # 224,224
     print(f'finish recovering pcds of {len(local_confs_mean)} frames in their local coordinates, with a mean confidence of {torch.stack(local_confs_mean).mean():.2f}')
 
     # Special treatment: register the frames within the range of initial window with L2W model
-    # TODO: batchify
     if kf_stride > 1:
         max_conf_mean = -1
-        for view_id in tqdm(range((init_num-1)*kf_stride), desc="pre-registering"):  
+
+        def run_l2w_preregister_batch(batch_ids, current_max):
+            if not batch_ids:
+                return current_max
+            batch_size = len(batch_ids)
+            for vid in batch_ids:
+                to_device(input_views[vid], device=device)
+            src_view = {}
+            for key in ('img_tokens', 'true_shape', 'img_pos', 'pts3d_cam'):
+                tensors = [input_views[vid][key] for vid in batch_ids if key in input_views[vid]]
+                if tensors:
+                    src_view[key] = torch.cat(tensors, dim=0)
+            if 'pts3d_cam' not in src_view:
+                raise RuntimeError('Missing pts3d_cam for preregistration batch')
+            batched_views = [src_view]
+            for ref_id in buffering_set_ids:
+                to_device(input_views[ref_id], device=device)
+                ref_view = {}
+                for key in ('img_tokens', 'true_shape', 'img_pos', 'pts3d_world'):
+                    if key not in input_views[ref_id]:
+                        continue
+                    tensor = input_views[ref_id][key]
+                    if tensor.shape[0] == batch_size:
+                        ref_view[key] = tensor
+                    else:
+                        ref_view[key] = tensor.expand(batch_size, *tensor.shape[1:]).contiguous()
+                batched_views.append(ref_view)
+            ref_ids_local = list(range(1, len(batched_views)))
+            with torch.no_grad():
+                output = l2w_model(batched_views, ref_ids=ref_ids_local)
+            src_pred = output[0]
+            pts_batch = src_pred['pts3d_in_other_view']
+            conf_batch = src_pred['conf']
+            conf_means = conf_batch.mean(dim=(1, 2))
+            for batch_idx, view_id in enumerate(batch_ids):
+                pts_world = pts_batch[batch_idx:batch_idx+1]
+                conf_map = conf_batch[batch_idx]
+                input_views[view_id]['pts3d_world'] = pts_world
+                per_frame_res['l2w_pcds'][view_id] = pts_world
+                per_frame_res['l2w_confs'][view_id] = conf_map
+                registered_confs_mean[view_id] = conf_map.mean().detach().cpu()
+            return max(current_max, conf_means.max().item())
+
+        prereg_batch = []
+        for view_id in tqdm(range((init_num-1)*kf_stride), desc="pre-registering"):
             if view_id % kf_stride == 0:
                 continue
-            # construct the input for L2W model
-            l2w_input_views = [input_views[view_id]] + [input_views[id] for id in buffering_set_ids]
-            # (for defination of ref_ids, see the doc of l2w_model)
-            output = l2w_inference(l2w_input_views, l2w_model, 
-                                   ref_ids=list(range(1,len(l2w_input_views))), 
-                                   device=device,
-                                   normalize=False)
-            
-            # process the output of L2W model
-            input_views[view_id]['pts3d_world'] = output[0]['pts3d_in_other_view'] # 1,224,224,3
-            conf_map = output[0]['conf'] # 1,224,224
-            per_frame_res['l2w_confs'][view_id] = conf_map[0] # 224,224
-            registered_confs_mean[view_id] = conf_map.mean().cpu()
-            per_frame_res['l2w_pcds'][view_id] = input_views[view_id]['pts3d_world']
-            
-            if registered_confs_mean[view_id] > max_conf_mean:
-                max_conf_mean = registered_confs_mean[view_id]
+            prereg_batch.append(view_id)
+            if len(prereg_batch) >= l2w_prereg_batch_size:
+                max_conf_mean = run_l2w_preregister_batch(prereg_batch, max_conf_mean)
+                prereg_batch = []
+        if prereg_batch:
+            max_conf_mean = run_l2w_preregister_batch(prereg_batch, max_conf_mean)
+
         print(f'finish aligning {(init_num-1)*kf_stride} head frames, with a max mean confidence of {max_conf_mean:.2f}')
         
         # A problem is that the registered_confs_mean of the initial window is generated by I2P model,

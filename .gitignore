@@ -215,3 +215,6 @@ data/
 
 #results
 results/
+
+#3d outputs
+*.glb
