@@ -99,8 +99,14 @@ class MultiviewDecoderBlock_max(nn.Module):
         ks = ks.permute(0, 2, 1, 3).reshape(Vy,B,Ny,num_heads,C// num_heads)  # (Vy, B, Ny, H, K)
 
         # construct query, key, value for each target view
-        ks_respect = torch.index_select(ks, 0, rel_ids_list_d)  # (Vx*M, B, Ny, H, K)
-        vs_respect = torch.index_select(vs, 0, rel_ids_list_d)  # (Vx*M, B, Ny, H, K)
+        # Optimization: avoid copy if selecting all sources in order (Common in I2P Ref side)
+        if Vx == 1 and M == Vy and torch.equal(rel_ids_list_d, torch.arange(Vy, device=rel_ids_list_d.device)):
+             ks_respect = ks
+             vs_respect = vs
+        else:
+             ks_respect = torch.index_select(ks, 0, rel_ids_list_d)  # (Vx*M, B, Ny, H, K)
+             vs_respect = torch.index_select(vs, 0, rel_ids_list_d)  # (Vx*M, B, Ny, H, K)
+             
         qs_corresp = torch.unsqueeze(qs, 1).expand(-1, M, -1, -1, -1, -1)  # (Vx, M, B, Nx, H, K)
         
         ks_compact = ks_respect.reshape(Vx*M*B, Ny, num_heads, C//num_heads)

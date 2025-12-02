@@ -537,7 +537,9 @@ class Local2WorldModel(Multiview3D):
     def get_pe(self, views, ref_ids):
         """embed 3D points with a single conv layer
         landscape_only not tested yet"""
-        pes = []
+        pos_list = []
+        b_list = []
+        
         for id, view in enumerate(views):
             if id in ref_ids:
                 pos = view['pts3d_world']
@@ -546,12 +548,27 @@ class Local2WorldModel(Multiview3D):
                 
             if pos.shape[-1] == 3:
                 pos = pos.permute(0,3, 1, 2)
-                
-            pts_embedding = self.ponit_embedder(pos).permute(0,2,3,1).reshape(pos.shape[0], -1, self.dec_embed_dim) # (B, S, D)
+            
+            pos_list.append(pos)
+            b_list.append(pos.shape[0])
+            
+        # Batch processing
+        batch_pos = torch.cat(pos_list, dim=0)
+        batch_embedding = self.ponit_embedder(batch_pos) # (Total_B, D, H, W)
+        batch_embedding = batch_embedding.permute(0,2,3,1).reshape(batch_embedding.shape[0], -1, self.dec_embed_dim)
+        
+        # Split back
+        pes = []
+        current_idx = 0
+        for id, b in enumerate(b_list):
+            pts_embedding = batch_embedding[current_idx : current_idx+b]
+            current_idx += b
+            
+            view = views[id]
             if 'patch_mask' in view:
-                patch_mask = view['patch_mask'].reshape(pos.shape[0], -1, 1) # (B, S, 1)
+                patch_mask = view['patch_mask'].reshape(b, -1, 1) # (B, S, 1)
                 pts_embedding = pts_embedding*(~patch_mask) + self.void_pe_token*patch_mask
-                
+            
             pes.append(pts_embedding)
         
         return pes
